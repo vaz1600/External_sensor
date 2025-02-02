@@ -22,7 +22,6 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 //#include "Wire.h"
-#include "RF24.h"
 #include "RF24_mesh.h"
 #include "aht20.h"
 #include "bmp180.h"
@@ -49,20 +48,21 @@ ADC_HandleTypeDef hadc;
 
 I2C_HandleTypeDef hi2c1;
 
-UART_HandleTypeDef hlpuart1;
-
 RTC_HandleTypeDef hrtc;
 
 SPI_HandleTypeDef hspi1;
 
 /* USER CODE BEGIN PV */
 uint8_t wait = 0;
-volatile uint32_t vcc = 0;
-volatile uint8_t connected = 0;
 
-uint8_t buf[32];
-char uart_buf[64];
-uint8_t len;
+typedef struct {
+  uint32_t vcc;
+  uint16_t period;
+  uint8_t connected;
+  uint8_t sensors;
+} sensor_state_t;
+
+sensor_state_t sensor_state;
 
 typedef struct {
   int8_t temp;
@@ -74,23 +74,9 @@ typedef struct {
 
 sensor_data_t s_data;
 
-#if 0
-uint8_t frame_buffer[32];
-uint8_t frame_size = 32;
+ uint32_t const * eeprom_data = (uint32_t const *)0x08080000;
 
-uint64_t pipe = 0xF0F0F0F0D2LL;
-
-static uint16_t next_id = 0;
-
-typedef struct
-{
-    uint16_t from_node;
-    uint16_t to_node;
-    uint16_t id;
-    unsigned char type;
-    unsigned char reserved;
-} RF24NetworkHeader;
-#endif
+//uint8_t const * const Addr = (uint8_t const *)0x8080000;
 
 /* USER CODE END PV */
 
@@ -99,7 +85,6 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_RTC_Init(void);
 static void MX_ADC_Init(void);
-static void MX_LPUART1_UART_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_I2C1_Init(void);
 /* USER CODE BEGIN PFP */
@@ -112,125 +97,6 @@ uint32_t board_ConvertToUnixTime(RTC_DateTypeDef *psDate, RTC_TimeTypeDef *psTim
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-void USART_TX (uint8_t* dt, uint16_t sz)
-{
-  uint16_t ind = 0;
-  while (ind<sz)
-  {
-    while (!LL_LPUART_IsActiveFlag_TXE(LPUART1)) {}
-    LL_LPUART_TransmitData8(LPUART1,*(uint8_t*)(dt+ind));
-    ind++;
-  }
-}
-#if 0
-uint64_t pipe_address(uint16_t node, uint8_t pipe)
-{
-
-    static uint8_t address_translation[] = { 0xc3,
-                                             0x3c,
-                                             0x33,
-                                             0xce,
-                                             0x3e,
-                                             0xe3,
-                                             0xec
-    };
-    uint64_t result = 0xCCCCCCCCCCLL;
-    uint8_t* out = (uint8_t*)(&result);
-
-    // Translate the address to use our optimally chosen radio address bytes
-    uint8_t count = 1;
-    uint16_t dec = node;
-
-    while (dec) {
-
-        if (pipe != 0 || !node)
-
-            out[count] = address_translation[(dec % 8)]; // Convert our decimal values to octal, translate them to address bytes, and set our address
-
-        dec /= 8;
-        count++;
-    }
-
-
-    if (pipe != 0 || !node)
-        out[0] = address_translation[pipe];
-    else
-        out[1] = address_translation[count - 1];
-
-    return result;
-}
-
-uint16_t node_address = 0x0924;
-
-uint8_t _multicast_level = 0;
-uint8_t parent_pipe = 0;
-uint16_t node_mask = 0;
-uint16_t parent_node;
-
-void setup_address(void)
-{
-    // First, establish the node_mask
-    uint16_t node_mask_check = 0xFFFF;
-
-    uint8_t count = 0;
-
-
-    while (node_address & node_mask_check) {
-        node_mask_check <<= 3;
-
-        count++;
-    }
-    _multicast_level = count;
-
-
-    node_mask = ~node_mask_check;
-
-    // parent mask is the next level down
-    uint16_t parent_mask = node_mask >> 3;
-
-    // parent node is the part IN the mask
-    parent_node = node_address & parent_mask;
-
-    // parent pipe is the part OUT of the mask
-    uint16_t i = node_address;
-    uint16_t m = parent_mask;
-    while (m) {
-        i >>= 3;
-        m >>= 3;
-    }
-    parent_pipe = i;
-}
-
-
-uint8_t write_to_pipe(uint16_t node, uint8_t pipe, uint8_t multicast)
-{
-    uint8_t ok = false;
-
-    stopListening();
-
-    setAutoAckPipe(0, !multicast);
-    openWritingPipe(pipe_address(node, pipe));
-
-    ok = write(frame_buffer, frame_size);
-
-    setAutoAckPipe(0, 0);
-    /*
-    ok = writeFast(frame_buffer, frame_size, 0);
-
-    ok = txStandBy(85);
-    setAutoAckPipe(0, 0);
-*/
-//    if (!(networkFlags & FLAG_FAST_FRAG)) {
-//        ok = txStandBy(txTimeout);
-//                setAutoAck(0, 0);
-//    }
-//    else if (!ok) {
-//        ok = txStandBy(txTimeout);
-//    }
-
-    return ok;
-}
-#endif
 
 /* USER CODE END 0 */
 
@@ -244,8 +110,7 @@ int main(void)
 	RTC_TimeTypeDef sTime = {0};
 	RTC_DateTypeDef sDate = {0};
 	RTC_AlarmTypeDef sAlarm = {0};
-	ADC_ChannelConfTypeDef sAdcConf = {0};
-	//RF24NetworkHeader *hdr;
+
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -268,142 +133,23 @@ int main(void)
   MX_GPIO_Init();
   MX_RTC_Init();
   MX_ADC_Init();
-  //MX_LPUART1_UART_Init();
   MX_SPI1_Init();
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
   LL_GPIO_SetOutputPin(GPIOA, LIGHT_EN_Pin);
 
+  sensor_state.vcc = 0;
+  sensor_state.period = 15;
+  sensor_state.connected = 0;
+  sensor_state.sensors = 0;
+
   mesh_Init();
-
-  mesh_AddressRequest();
-
-  connected = mesh_Lookup();
-
-
-
-#if 0
-  NRF_Init();
-
-
-  stopListening();
-
-  setChannel(97);
-  //mesh addr 0x0924
-  setAutoAck(1);
-  setAutoAckPipe(0, 0);
-  enableDynamicPayloads();
-
-
-  //begin(node_address)
-  // Use different retry periods to reduce data collisions
-  uint8_t retryVar = (((node_address % 6) + 1) * 2) + 3;
-  setRetries(retryVar, 5); // max about 85ms per attempt
-  //txTimeout = 25;
-  //routeTimeout = txTimeout * 3; // Adjust for max delay per node within a single chain
-
-  // Setup our address helper cache
-  setup_address();
-
-    // Open up all listening pipes
-    uint8_t i = 6;
-    while (i--)
-      openReadingPipe(i, pipe_address(node_address, i));
-
-   startListening();
-
-  //openWritingPipe(pipe);
-
-   // net poll
-   hdr = (RF24NetworkHeader *)frame_buffer;
-
-    hdr->from_node = 0x0924;
-    hdr->to_node = 0x0040;
-    hdr->id = next_id++;
-    hdr->type = 0xC2;
-    hdr->reserved = 0;
-
-    frame_size = 8;
-
-    write_to_pipe(0, 0, 1);
-
-    startListening();
-
-    while(availableMy() == 0);
-
-    frame_size = getDynamicPayloadSize();
-    read(frame_buffer, frame_size);
-
-    HAL_Delay(10);
-
-
-    // address request
-    hdr = (RF24NetworkHeader *)frame_buffer;
-
-    hdr->from_node = 0x0924;
-    hdr->to_node = 0x0000;
-    hdr->id = next_id++;
-    hdr->type = 0xC3;
-    hdr->reserved = 0x01; // node address
-
-    frame_size = 8;
-
-    write_to_pipe(0, 0, 1);
-
-    startListening();
-
-    while(availableMy() == 0);
-
-    frame_size = getDynamicPayloadSize();
-    read(frame_buffer, frame_size);
-
-    memcpy(&node_address, &frame_buffer[8], 2);
-
-    //begin(node_address)
-    // Use different retry periods to reduce data collisions
-    retryVar = (((node_address % 6) + 1) * 2) + 3;
-    setRetries(retryVar, 5); // max about 85ms per attempt
-    //txTimeout = 25;
-    //routeTimeout = txTimeout * 3; // Adjust for max delay per node within a single chain
-
-    // Setup our address helper cache
-    setup_address();
-
-    // Open up all listening pipes
-    i = 6;
-    while (i--)
-      openReadingPipe(i, pipe_address(node_address, i));
-
-    startListening();
-
-
-    HAL_Delay(10);
-
-    //mesh lookup
-    hdr = (RF24NetworkHeader *)frame_buffer;
-
-    hdr->from_node = node_address;
-    hdr->to_node = 0x0000;
-    hdr->id = next_id++;
-    hdr->type = 0xC6;
-    hdr->reserved = 0x00; // node address
-
-    memcpy(&frame_buffer[8], &node_address, 2);
-
-    frame_size = 10;
-
-    write_to_pipe(0, 5, 0);
-
-    startListening();
-
-    while(availableMy() == 0);
-
-    frame_size = getDynamicPayloadSize();
-    read(frame_buffer, frame_size);
-#endif
+//  mesh_AddressRequest();
+//  connected = mesh_Lookup();
 
   // нужна задержка, чтобы можно было прошивку записать/ прочитать
   // в режимах сна SWIO отключается
+  // в RTC_init ставится будильник с прерыванием на 5 секунд
   LL_GPIO_SetOutputPin(GPIOA, GPIO_PIN_11);
   wait = 1;
   while(wait);
@@ -414,18 +160,20 @@ int main(void)
 
   mesh_AddressRequest();
   HAL_Delay(200);
-  connected = mesh_Lookup();
+  sensor_state.connected = mesh_Lookup();
 
-//  HAL_Delay(1000);
-//  len = sprintf(uart_buf, "ready");
-//  HAL_UART_Transmit(&hlpuart1, uart_buf, len, 2000);
+  // инициализация датчиков
+  if(aht20_Init(&hi2c1) == AHT20_OK)
+      sensor_state.sensors |= 0x01;
 
+  //aht20_Measure();
+  if(bmp180_Init(&hi2c1))
+      sensor_state.sensors |= 0x02;
 
-  aht20_Init(&hi2c1);
-
-  aht20_Measure();
-
-  bmp180_Init(&hi2c1);
+//  HAL_FLASHEx_DATAEEPROM_Unlock();
+//  HAL_FLASHEx_DATAEEPROM_Program(FLASH_TYPEPROGRAMDATA_WORD, 0x08080000, 9);
+//
+//  HAL_FLASHEx_DATAEEPROM_Lock();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -443,75 +191,21 @@ int main(void)
 	  MX_I2C1_Init();
 	  LL_GPIO_SetOutputPin(GPIOA, LIGHT_EN_Pin);
 #endif
-	  //HAL_GPIO_WritePin(GPIOA, LIGHT_EN_Pin, GPIO_PIN_SET);
-//
-//	  buf[3] = ~buf[0];
-//		if(buf[3] != buf[1])
-//		{
-//		    LL_GPIO_SetOutputPin(GPIOA, GPIO_PIN_11);
-//            HAL_Delay(200);
-//            LL_GPIO_ResetOutputPin(GPIOA, GPIO_PIN_11);
-//            HAL_Delay(200);
-//            LL_GPIO_SetOutputPin(GPIOA, GPIO_PIN_11);
-//            HAL_Delay(200);
-//            LL_GPIO_ResetOutputPin(GPIOA, GPIO_PIN_11);
-//            HAL_Delay(200);
-//		}
-//
-//	  LL_GPIO_SetOutputPin(GPIOA, GPIO_PIN_11);
-//	  HAL_Delay(200);
-//	  LL_GPIO_ResetOutputPin(GPIOA, GPIO_PIN_11);
-//	  HAL_Delay(10);
 
-//	  LL_GPIO_SetOutputPin(GPIOA, VCC_EN_Pin);
-//	  HAL_Delay(1);
-//	  LL_GPIO_SetOutputPin(GPIOA, GPIO_PIN_11);
-//	  sAdcConf.Channel = 0;
-//	  sAdcConf.Rank = ADC_RANK_NONE;
-//
-//	  HAL_ADC_ConfigChannel(&hadc, &sAdcConf);
-//	  HAL_ADC_Start(&hadc);
-//	  HAL_ADC_PollForConversion(&hadc, 200);
-//	  vcc = HAL_ADC_GetValue(&hadc);
-//	  vcc = vcc*1412/1000;
-//	  // r1*(r1+r2) = 0.492
-//	  LL_GPIO_ResetOutputPin(GPIOA, GPIO_PIN_11);
-//
-//	  LL_GPIO_ResetOutputPin(GPIOA, VCC_EN_Pin);
-
+	  // включаем nrf24
 	  powerUp();
 
-	  vcc = board_GetVcc();
+	  sensor_state.vcc = board_GetVcc();
 
 	  s_data.light = board_GetLight();
 
-//	  buf[0] = vcc & 0xFF;
-//	  buf[1] = ~buf[0];
-//	  buf[2] = buf[0] + buf[1];
-
-//	  len = sprintf(uart_buf, "vcc %u\r\n", vcc);
-//	  HAL_UART_Transmit(&hlpuart1, uart_buf, len, 2000);
-	  //USART_TX(uart_buf, len);
-
+	  // опрос датчиков
 	  aht20_Measure();
 	  s_data.temp = (int8_t )(aht20_GetTemp()/10);
 	  s_data.humidity = (uint8_t )(aht20_GetHumidity()/10);
 
 	  bmp180_GetTemp();
 	  s_data.pressure = (uint16_t )(bmp180_GetPressure()/10);
-
-	  s_data.timestamp = HAL_GetTick();
-//	  len = sprintf(uart_buf, "temp %d C\r\n", aht20_GetTemp());
-//	  HAL_UART_Transmit(&hlpuart1, uart_buf, len, 2000);
-	  //USART_TX(uart_buf, len);
-
-//      len = sprintf(uart_buf, "humidity %d %%\r\n\r\n", aht20_GetHumidity());
-//      HAL_UART_Transmit(&hlpuart1, uart_buf, len, 2000);
-      //USART_TX(uart_buf, len);
-
-	  //HAL_SPI_Transmit(&hspi1, buf, 3, 2000);
-
-	  //check connection
 
 	  // запуск будильника на следующее пробуждение
 	  HAL_RTC_DeactivateAlarm(&hrtc, RTC_ALARM_A);
@@ -522,25 +216,31 @@ int main(void)
 
 	  s_data.timestamp = board_ConvertToUnixTime(&sDate, &sTime);
 
-	  if(connected)
+	  // если не подключены к сети, то пробуем подключиться
+	  if(!sensor_state.connected)
 	  {
-        // пробуем отправить сообщение
-        connected = mesh_Write('T', &s_data, sizeof(sensor_data_t));
-	  }
-	  else
-	  {
-	      connected = mesh_AddressRequest();
-	      // mesh_Lookup();
+	      sensor_state.connected = mesh_AddressRequest();
 	  }
 
+	  // пробуем отправить сообщение
+	  if(sensor_state.connected)
+	  {
+	      sensor_state.connected = mesh_Write('T', (uint8_t *)&s_data, sizeof(sensor_data_t));
+
+	      // ждем чего-нибудь от базовой станции
+	  }
+//	  else
+//	  {
+//	      // запись в еепром?
+//	  }
+	  // ставим время следующего пробуждения
         sAlarm.AlarmTime.Hours = 0;//sTime.Hours;
-        sAlarm.AlarmTime.Minutes = 0;//sTime.Minutes;
-        sAlarm.AlarmTime.Seconds = (sTime.Seconds + 10 ) % 60;
+        sAlarm.AlarmTime.Minutes = sTime.Minutes + sensor_state.period / 60;
+        sAlarm.AlarmTime.Seconds = (sTime.Seconds + (sensor_state.period % 60) ) % 60;
         sAlarm.AlarmTime.SubSeconds = 0;
         sAlarm.AlarmTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
         sAlarm.AlarmTime.StoreOperation = RTC_STOREOPERATION_RESET;
-        sAlarm.AlarmMask = RTC_ALARMMASK_DATEWEEKDAY|RTC_ALARMMASK_HOURS
-                                    |RTC_ALARMMASK_MINUTES;
+        sAlarm.AlarmMask = RTC_ALARMMASK_DATEWEEKDAY | RTC_ALARMMASK_HOURS;// |RTC_ALARMMASK_MINUTES;
         sAlarm.AlarmSubSecondMask = RTC_ALARMSUBSECONDMASK_ALL;
         sAlarm.AlarmDateWeekDaySel = RTC_ALARMDATEWEEKDAYSEL_DATE;
         sAlarm.AlarmDateWeekDay = 1;
@@ -746,39 +446,6 @@ static void MX_I2C1_Init(void)
 
 }
 
-/**
-  * @brief LPUART1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_LPUART1_UART_Init(void)
-{
-
-  /* USER CODE BEGIN LPUART1_Init 0 */
-
-  /* USER CODE END LPUART1_Init 0 */
-
-  /* USER CODE BEGIN LPUART1_Init 1 */
-
-  /* USER CODE END LPUART1_Init 1 */
-  hlpuart1.Instance = LPUART1;
-  hlpuart1.Init.BaudRate = 9600;
-  hlpuart1.Init.WordLength = UART_WORDLENGTH_8B;
-  hlpuart1.Init.StopBits = UART_STOPBITS_1;
-  hlpuart1.Init.Parity = UART_PARITY_NONE;
-  hlpuart1.Init.Mode = UART_MODE_TX;
-  hlpuart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  hlpuart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
-  hlpuart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-  if (HAL_UART_Init(&hlpuart1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN LPUART1_Init 2 */
-
-  /* USER CODE END LPUART1_Init 2 */
-
-}
 
 /**
   * @brief RTC Initialization Function
@@ -1067,47 +734,10 @@ static const int _DAYS_BEFORE_MONTH[12] =
 
 uint32_t board_ConvertToUnixTime(RTC_DateTypeDef *psDate, RTC_TimeTypeDef *psTime)
 {
-#if 0
-    uint32_t y;
-    uint32_t m;
-    uint32_t d;
-    uint32_t t;
-
-    //Year
-    y = psDate->Year;
-    //Month of year
-    m = psDate->Month;
-    //Day of month
-    d = psDate->Date;
-
-    //January and February are counted as months 13 and 14 of the previous year
-    if(m <= 2)
-    {
-       m += 12;
-       y -= 1;
-    }
-
-    //Convert years to days
-    t = (365 * y) + (y / 4) - (y / 100) + (y / 400);
-    //Convert months to days
-    t += (30 * m) + (3 * (m + 1) / 5) + d;
-    //Unix time starts on January 1st, 1970
-    t -= 719561;
-    //Convert days to seconds
-    t *= 86400;
-    //Add hours, minutes and seconds
-    t += (3600 * psTime->Hours) + (60 * psTime->Minutes) + psTime->Seconds;
-
-    //Return Unix time
-    return t;
-#endif
     uint32_t tim = 0;
     long days = 0;
     int year, isdst=0;
-//    __tzinfo_type *tz = __gettzinfo ();
-//
-//    /* validate structure */
-//    validate_structure (tim_p);
+
     psDate->Month--;
 
     psDate->Year += 100;
@@ -1121,12 +751,6 @@ uint32_t board_ConvertToUnixTime(RTC_DateTypeDef *psDate, RTC_TimeTypeDef *psTim
 
     if (psDate->Month > 1 && _DAYS_IN_YEAR (psDate->Year) == 366)
         days++;
-
-    /* compute day of the year */
-    //tim_p->tm_yday = days;
-
-//    if (tim_p->tm_year > 10000 || tim_p->tm_year < -10000)
-//      return (time_t) -1;
 
     /* compute days in other years */
     if ((year = psDate->Year) > 70)
