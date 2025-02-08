@@ -130,15 +130,12 @@ int16_t bmp180_GetTemp(void)
 {
     bmp.uncomp.temp = get_ut();
 
-    //return compensateTemperature(bmp.uncomp.temp);
     return get_temp(&bmp);
 }
 
 int32_t bmp180_GetPressure(void)
 {
     bmp.uncomp.press = get_up(bmp.oss);
-
-    //return compensatePressure(bmp.uncomp.press, 1);
 
     return get_pressure(&bmp);
 }

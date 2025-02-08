@@ -218,6 +218,11 @@ uint8_t NRF_Init(void)
 	return (setup != 0 && setup != 0xff);
 }
 
+void NRF_sleep(void)
+{
+    powerDown();
+}
+
 bool isChipConnected()
 {
 	uint8_t setup = read_register(SETUP_AW);

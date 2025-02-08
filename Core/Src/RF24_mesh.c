@@ -46,7 +46,6 @@ void mesh_Init(void)
             HAL_Delay(200);
         }
     }
-    //setPALevel(0);
 
     stopListening();
 

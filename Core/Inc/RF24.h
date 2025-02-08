@@ -147,6 +147,7 @@ typedef enum
 
 
 uint8_t NRF_Init(void);
+void NRF_sleep(void);
 bool isChipConnected();
 void startListening(void);
 void stopListening(void);

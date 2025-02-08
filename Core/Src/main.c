@@ -22,9 +22,11 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 //#include "Wire.h"
+#include "RF24.h"
 #include "RF24_mesh.h"
 #include "aht20.h"
 #include "bmp180.h"
+#include "util.h"
 
 /* USER CODE END Includes */
 
@@ -35,7 +37,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define NO_SLEEP
+//#define NO_SLEEP
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -77,6 +79,15 @@ sensor_data_t s_data;
  uint32_t const * eeprom_data = (uint32_t const *)0x08080000;
 
 //uint8_t const * const Addr = (uint8_t const *)0x8080000;
+ typedef struct {
+   int8_t temp;
+   uint8_t humidity;
+   uint16_t pressure;
+   uint16_t light;
+   uint16_t vcc;
+   uint32_t timestamp;
+ } eeprom_entry_t;
+
 
 /* USER CODE END PV */
 
@@ -144,8 +155,6 @@ int main(void)
   sensor_state.sensors = 0;
 
   mesh_Init();
-//  mesh_AddressRequest();
-//  connected = mesh_Lookup();
 
   // нужна задержка, чтобы можно было прошивку записать/ прочитать
   // в режимах сна SWIO отключается
@@ -166,7 +175,6 @@ int main(void)
   if(aht20_Init(&hi2c1) == AHT20_OK)
       sensor_state.sensors |= 0x01;
 
-  //aht20_Measure();
   if(bmp180_Init(&hi2c1))
       sensor_state.sensors |= 0x02;
 
@@ -191,10 +199,6 @@ int main(void)
 	  MX_I2C1_Init();
 	  LL_GPIO_SetOutputPin(GPIOA, LIGHT_EN_Pin);
 #endif
-
-	  // включаем nrf24
-	  powerUp();
-
 	  sensor_state.vcc = board_GetVcc();
 
 	  s_data.light = board_GetLight();
@@ -234,9 +238,18 @@ int main(void)
 //	      // запись в еепром?
 //	  }
 	  // ставим время следующего пробуждения
-        sAlarm.AlarmTime.Hours = 0;//sTime.Hours;
-        sAlarm.AlarmTime.Minutes = sTime.Minutes + sensor_state.period / 60;
-        sAlarm.AlarmTime.Seconds = (sTime.Seconds + (sensor_state.period % 60) ) % 60;
+	    sTime.Seconds = sTime.Seconds + (sensor_state.period % 60);
+	    if(sTime.Seconds >= 60)
+	    {
+	        sTime.Seconds -= 60;
+	        sTime.Minutes++;
+	        sTime.Minutes %= 60;
+	    }
+
+        sAlarm.AlarmTime.Hours = 0;
+	    sAlarm.AlarmTime.Minutes = sTime.Minutes;
+	    sAlarm.AlarmTime.Seconds = sTime.Seconds;
+
         sAlarm.AlarmTime.SubSeconds = 0;
         sAlarm.AlarmTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
         sAlarm.AlarmTime.StoreOperation = RTC_STOREOPERATION_RESET;
@@ -251,12 +264,12 @@ int main(void)
         }
 
 #ifdef NO_SLEEP
-        powerDown();
+        NRF_sleep();
 
 		wait = 1;
 		while(wait);
 #else
-		powerDown();
+		NRF_sleep();
 
 		/* Configure the system Power */
 		SystemPower_Config();
@@ -488,8 +501,8 @@ static void MX_RTC_Init(void)
 
   if( (sDate.Year == 0) && (sDate.Month == 1) && (sDate.Date == 1) )
   {
-        sTime.Hours = 12;
-        sTime.Minutes = 15;
+        sTime.Hours = 9;
+        sTime.Minutes = 00;
         sTime.Seconds = 0;
         sTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
         sTime.StoreOperation = RTC_STOREOPERATION_RESET;
@@ -679,6 +692,7 @@ void HAL_RTC_AlarmAEventCallback(RTC_HandleTypeDef *hrtc)
 uint16_t board_GetVcc(void)
 {
     uint32_t temp;
+    uint8_t i;
     ADC_ChannelConfTypeDef sAdcConf = {0};
 
     LL_GPIO_SetOutputPin(GPIOA, VCC_EN_Pin);
@@ -686,10 +700,16 @@ uint16_t board_GetVcc(void)
     sAdcConf.Channel = 0;
     sAdcConf.Rank = ADC_RANK_NONE;
 
-    HAL_ADC_ConfigChannel(&hadc, &sAdcConf);
-    HAL_ADC_Start(&hadc);
-    HAL_ADC_PollForConversion(&hadc, 200);
-    temp = HAL_ADC_GetValue(&hadc);
+    temp = 0;
+    for(i = 0 ; i < 8; i++)
+    {
+        HAL_ADC_ConfigChannel(&hadc, &sAdcConf);
+        HAL_ADC_Start(&hadc);
+        HAL_ADC_PollForConversion(&hadc, 200);
+        temp += HAL_ADC_GetValue(&hadc);
+    }
+    temp /= 8;
+
     temp = temp*1553/1000;
     // r1*(r1+r2) = 0.492
     LL_GPIO_ResetOutputPin(GPIOA, VCC_EN_Pin);
@@ -715,61 +735,6 @@ uint16_t board_GetLight(void)
     LL_GPIO_SetOutputPin(GPIOA, LIGHT_EN_Pin);
 
     return (uint16_t )temp;
-}
-
-#define _SEC_IN_MINUTE 60L
-#define _SEC_IN_HOUR 3600L
-#define _SEC_IN_DAY 86400L
-
-static const int DAYS_IN_MONTH[12] =
-{31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-
-#define _DAYS_IN_MONTH(x) ((x == 1) ? days_in_feb : DAYS_IN_MONTH[x])
-
-static const int _DAYS_BEFORE_MONTH[12] =
-{0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334};
-
-#define _ISLEAP(y) (((y) % 4) == 0 && (((y) % 100) != 0 || (((y)+1900) % 400) == 0))
-#define _DAYS_IN_YEAR(year) (_ISLEAP(year) ? 366 : 365)
-
-uint32_t board_ConvertToUnixTime(RTC_DateTypeDef *psDate, RTC_TimeTypeDef *psTime)
-{
-    uint32_t tim = 0;
-    long days = 0;
-    int year, isdst=0;
-
-    psDate->Month--;
-
-    psDate->Year += 100;
-
-    /* compute hours, minutes, seconds */
-    tim += psTime->Seconds + (psTime->Minutes * _SEC_IN_MINUTE) + (psTime->Hours * _SEC_IN_HOUR);
-
-    /* compute days in year */
-    days += psDate->Date - 1;
-    days += _DAYS_BEFORE_MONTH[psDate->Month];
-
-    if (psDate->Month > 1 && _DAYS_IN_YEAR (psDate->Year) == 366)
-        days++;
-
-    /* compute days in other years */
-    if ((year = psDate->Year) > 70)
-    {
-      for (year = 70; year < psDate->Year; year++)
-          days += _DAYS_IN_YEAR (year);
-    }
-    else if (year < 70)
-    {
-      for (year = 69; year > psDate->Year; year--)
-          days -= _DAYS_IN_YEAR (year);
-
-      days -= _DAYS_IN_YEAR (year);
-    }
-
-    /* compute total seconds */
-    tim += (uint32_t )days * _SEC_IN_DAY;
-
-    return tim;
 }
 
 /**
