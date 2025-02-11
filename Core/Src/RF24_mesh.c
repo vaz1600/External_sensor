@@ -89,6 +89,8 @@ uint8_t mesh_AddressRequest(void)
     uint8_t poll;
     uint16_t contact_node = 0;
 
+    powerUp();
+
     // poll network
     for(poll = 0; poll < 3; poll++)
     {
@@ -225,6 +227,8 @@ uint8_t mesh_Write(uint8_t type, uint8_t *buf, uint8_t size)
     uint8_t ok;
 
     LL_GPIO_SetOutputPin(GPIOA, GPIO_PIN_11);
+
+    powerUp();
 
     memcpy(frame_buffer, &h, 8);
 

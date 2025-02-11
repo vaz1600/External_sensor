@@ -27,7 +27,9 @@
 #include "aht20.h"
 #include "bmp180.h"
 #include "util.h"
-
+#include "lfs.h"
+//#include "w25qxx_littlefs.h"
+#include "mem.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -46,9 +48,10 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-ADC_HandleTypeDef hadc;
 
 I2C_HandleTypeDef hi2c1;
+
+UART_HandleTypeDef hlpuart1;
 
 RTC_HandleTypeDef hrtc;
 
@@ -76,19 +79,33 @@ typedef struct {
 
 sensor_data_t s_data;
 
- uint32_t const * eeprom_data = (uint32_t const *)0x08080000;
+ //uint32_t const * eeprom_data = (uint32_t const *)0x08080000;
 
 //uint8_t const * const Addr = (uint8_t const *)0x8080000;
- typedef struct {
-   int8_t temp;
-   uint8_t humidity;
-   uint16_t pressure;
-   uint16_t light;
-   uint16_t vcc;
-   uint32_t timestamp;
- } eeprom_entry_t;
+typedef struct {
+    uint32_t timestamp;
+    uint16_t vcc;
+    int8_t temp;
+    uint8_t humidity;
+    int8_t temp2;
+    uint8_t dummy;
+    uint16_t pressure;
+    uint16_t light;
+    uint16_t crc16;
+} eeprom_entry_t ;
 
+typedef struct {
+eeprom_entry_t entries[16];
+//uint32_t crc32;
+} eeprom_page_t;
 
+eeprom_page_t cache;
+uint16_t eeprom_page_ptr;
+uint16_t entry_ptr;
+
+eeprom_entry_t temp_entry;
+
+ //W25QXX_HandleTypeDef w25_handle;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -96,13 +113,16 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_RTC_Init(void);
 static void MX_ADC_Init(void);
+static void MX_LPUART1_UART_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_I2C1_Init(void);
 /* USER CODE BEGIN PFP */
 static void SystemPower_Config(void);
 uint16_t board_GetVcc(void);
 uint16_t board_GetLight(void);
-uint32_t board_ConvertToUnixTime(RTC_DateTypeDef *psDate, RTC_TimeTypeDef *psTime);
+uint8_t board_GetNextFreeEntry(void);
+uint8_t board_WriteEntry(eeprom_entry_t *entry);
+//uint32_t board_ConvertToUnixTime(RTC_DateTypeDef *psDate, RTC_TimeTypeDef *psTime);
 
 /* USER CODE END PFP */
 
@@ -144,6 +164,7 @@ int main(void)
   MX_GPIO_Init();
   MX_RTC_Init();
   MX_ADC_Init();
+  MX_LPUART1_UART_Init();
   MX_SPI1_Init();
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
@@ -156,13 +177,34 @@ int main(void)
 
   mesh_Init();
 
+
+  if(mem_init() == MEM_OK)
+  {
+      sensor_state.sensors |= 0x08;
+
+      if(board_GetNextFreeEntry() == 0)
+      {
+          sensor_state.sensors |= 0x04;
+      }
+
+  }
+
   // нужна задержка, чтобы можно было прошивку записать/ прочитать
   // в режимах сна SWIO отключается
   // в RTC_init ставится будильник с прерыванием на 5 секунд
   LL_GPIO_SetOutputPin(GPIOA, GPIO_PIN_11);
-  wait = 1;
-  while(wait);
+//  wait = 1;
+//  while(wait);
+
+  HAL_Delay(1000);
+  HAL_Delay(1000);
+  HAL_Delay(1000);
+  HAL_Delay(1000);
+  HAL_Delay(1000);
+
   LL_GPIO_ResetOutputPin(GPIOA, GPIO_PIN_11);
+
+ // w25qxx_init(&w25_handle, &hspi1, GPIOA, 4);
 
   // хрен знает поччему, но после повторной инициализции передача идет нормально
   mesh_Init();
@@ -177,6 +219,8 @@ int main(void)
 
   if(bmp180_Init(&hi2c1))
       sensor_state.sensors |= 0x02;
+
+
 
 //  HAL_FLASHEx_DATAEEPROM_Unlock();
 //  HAL_FLASHEx_DATAEEPROM_Program(FLASH_TYPEPROGRAMDATA_WORD, 0x08080000, 9);
@@ -233,6 +277,19 @@ int main(void)
 
 	      // ждем чего-нибудь от базовой станции
 	  }
+
+	  // пока так
+	  temp_entry.timestamp = s_data.timestamp;
+	  temp_entry.vcc = sensor_state.vcc;
+	  temp_entry.temp = s_data.temp;
+	  temp_entry.humidity = s_data.humidity;
+	  temp_entry.pressure = s_data.pressure;
+	  temp_entry.light = s_data.light;
+	  temp_entry.temp2 = 0;
+	  temp_entry.dummy = 0x55;
+	  temp_entry.crc16 = 0;
+
+	  board_WriteEntry(&temp_entry);
 //	  else
 //	  {
 //	      // запись в еепром?
@@ -359,51 +416,76 @@ static void MX_ADC_Init(void)
 
   /* USER CODE END ADC_Init 0 */
 
-  ADC_ChannelConfTypeDef sConfig = {0};
+  LL_ADC_REG_InitTypeDef ADC_REG_InitStruct = {0};
+  LL_ADC_InitTypeDef ADC_InitStruct = {0};
+
+  LL_GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  /* Peripheral clock enable */
+  LL_APB2_GRP1_EnableClock(LL_APB2_GRP1_PERIPH_ADC1);
+
+  LL_IOP_GRP1_EnableClock(LL_IOP_GRP1_PERIPH_GPIOA);
+  LL_IOP_GRP1_EnableClock(LL_IOP_GRP1_PERIPH_GPIOB);
+  /**ADC GPIO Configuration
+  PA0-CK_IN   ------> ADC_IN0
+  PB1   ------> ADC_IN9
+  */
+  GPIO_InitStruct.Pin = LL_GPIO_PIN_0;
+  GPIO_InitStruct.Mode = LL_GPIO_MODE_ANALOG;
+  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
+  LL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  GPIO_InitStruct.Pin = LL_GPIO_PIN_1;
+  GPIO_InitStruct.Mode = LL_GPIO_MODE_ANALOG;
+  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
+  LL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* USER CODE BEGIN ADC_Init 1 */
 
   /* USER CODE END ADC_Init 1 */
 
-  /** Configure the global features of the ADC (Clock, Resolution, Data Alignment and number of conversion)
+  /** Configure Regular Channel
   */
-  hadc.Instance = ADC1;
-  hadc.Init.OversamplingMode = DISABLE;
-  hadc.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV8;
-  hadc.Init.Resolution = ADC_RESOLUTION_12B;
-  hadc.Init.SamplingTime = ADC_SAMPLETIME_79CYCLES_5;
-  hadc.Init.ScanConvMode = ADC_SCAN_DIRECTION_FORWARD;
-  hadc.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-  hadc.Init.ContinuousConvMode = DISABLE;
-  hadc.Init.DiscontinuousConvMode = DISABLE;
-  hadc.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
-  hadc.Init.ExternalTrigConv = ADC_SOFTWARE_START;
-  hadc.Init.DMAContinuousRequests = DISABLE;
-  hadc.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
-  hadc.Init.Overrun = ADC_OVR_DATA_PRESERVED;
-  hadc.Init.LowPowerAutoWait = DISABLE;
-  hadc.Init.LowPowerFrequencyMode = ENABLE;
-  hadc.Init.LowPowerAutoPowerOff = DISABLE;
-  if (HAL_ADC_Init(&hadc) != HAL_OK)
-  {
-    Error_Handler();
-  }
+  LL_ADC_REG_SetSequencerChAdd(ADC1, LL_ADC_CHANNEL_0);
 
-  /** Configure for the selected ADC regular channel to be converted.
+  /** Configure Regular Channel
   */
-  sConfig.Channel = ADC_CHANNEL_0;
-  sConfig.Rank = ADC_RANK_CHANNEL_NUMBER;
-  if (HAL_ADC_ConfigChannel(&hadc, &sConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
+  LL_ADC_REG_SetSequencerChAdd(ADC1, LL_ADC_CHANNEL_9);
 
-  /** Configure for the selected ADC regular channel to be converted.
+  /** Common config
   */
-  sConfig.Channel = ADC_CHANNEL_9;
-  if (HAL_ADC_ConfigChannel(&hadc, &sConfig) != HAL_OK)
+  ADC_REG_InitStruct.TriggerSource = LL_ADC_REG_TRIG_SOFTWARE;
+  ADC_REG_InitStruct.SequencerDiscont = LL_ADC_REG_SEQ_DISCONT_DISABLE;
+  ADC_REG_InitStruct.ContinuousMode = LL_ADC_REG_CONV_SINGLE;
+  ADC_REG_InitStruct.DMATransfer = LL_ADC_REG_DMA_TRANSFER_NONE;
+  ADC_REG_InitStruct.Overrun = LL_ADC_REG_OVR_DATA_PRESERVED;
+  LL_ADC_REG_Init(ADC1, &ADC_REG_InitStruct);
+  LL_ADC_SetSamplingTimeCommonChannels(ADC1, LL_ADC_SAMPLINGTIME_79CYCLES_5);
+  LL_ADC_SetOverSamplingScope(ADC1, LL_ADC_OVS_DISABLE);
+  LL_ADC_REG_SetSequencerScanDirection(ADC1, LL_ADC_REG_SEQ_SCAN_DIR_FORWARD);
+  LL_ADC_SetCommonFrequencyMode(__LL_ADC_COMMON_INSTANCE(ADC1), LL_ADC_CLOCK_FREQ_MODE_LOW);
+  LL_ADC_DisableIT_EOC(ADC1);
+  LL_ADC_DisableIT_EOS(ADC1);
+  ADC_InitStruct.Resolution = LL_ADC_RESOLUTION_12B;
+  ADC_InitStruct.DataAlignment = LL_ADC_DATA_ALIGN_RIGHT;
+  ADC_InitStruct.LowPowerMode = LL_ADC_LP_MODE_NONE;
+  LL_ADC_Init(ADC1, &ADC_InitStruct);
+  LL_ADC_SetClock(ADC1, LL_ADC_CLOCK_ASYNC);
+  LL_ADC_SetCommonClock(__LL_ADC_COMMON_INSTANCE(ADC1), LL_ADC_CLOCK_ASYNC_DIV8);
+
+  /* Enable ADC internal voltage regulator */
+  LL_ADC_EnableInternalRegulator(ADC1);
+  /* Delay for ADC internal voltage regulator stabilization. */
+  /* Compute number of CPU cycles to wait for, from delay in us. */
+  /* Note: Variable divided by 2 to compensate partially */
+  /* CPU processing cycles (depends on compilation optimization). */
+  /* Note: If system core clock frequency is below 200kHz, wait time */
+  /* is only a few CPU processing cycles. */
+  uint32_t wait_loop_index;
+  wait_loop_index = ((LL_ADC_DELAY_INTERNAL_REGUL_STAB_US * (SystemCoreClock / (100000 * 2))) / 10);
+  while(wait_loop_index != 0)
   {
-    Error_Handler();
+    wait_loop_index--;
   }
   /* USER CODE BEGIN ADC_Init 2 */
 
@@ -459,6 +541,39 @@ static void MX_I2C1_Init(void)
 
 }
 
+/**
+  * @brief LPUART1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_LPUART1_UART_Init(void)
+{
+
+  /* USER CODE BEGIN LPUART1_Init 0 */
+
+  /* USER CODE END LPUART1_Init 0 */
+
+  /* USER CODE BEGIN LPUART1_Init 1 */
+
+  /* USER CODE END LPUART1_Init 1 */
+  hlpuart1.Instance = LPUART1;
+  hlpuart1.Init.BaudRate = 9600;
+  hlpuart1.Init.WordLength = UART_WORDLENGTH_8B;
+  hlpuart1.Init.StopBits = UART_STOPBITS_1;
+  hlpuart1.Init.Parity = UART_PARITY_NONE;
+  hlpuart1.Init.Mode = UART_MODE_TX;
+  hlpuart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  hlpuart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  hlpuart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&hlpuart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN LPUART1_Init 2 */
+
+  /* USER CODE END LPUART1_Init 2 */
+
+}
 
 /**
   * @brief RTC Initialization Function
@@ -522,7 +637,7 @@ static void MX_RTC_Init(void)
         }
   }
   /* USER CODE END Check_RTC_BKUP */
-#if 0
+
   /** Initialize RTC and set the Time and Date
   */
   sTime.Hours = 12;
@@ -543,12 +658,12 @@ static void MX_RTC_Init(void)
   {
     Error_Handler();
   }
-#endif
+
   /** Enable the Alarm A
   */
-  sAlarm.AlarmTime.Hours = sTime.Hours;//12;
-  sAlarm.AlarmTime.Minutes = sTime.Minutes;//15;
-  sAlarm.AlarmTime.Seconds = sTime.Seconds + 5;
+  sAlarm.AlarmTime.Hours = 12;
+  sAlarm.AlarmTime.Minutes = 15;
+  sAlarm.AlarmTime.Seconds = 5;
   sAlarm.AlarmTime.SubSeconds = 0;
   sAlarm.AlarmTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
   sAlarm.AlarmTime.StoreOperation = RTC_STOREOPERATION_RESET;
@@ -633,7 +748,7 @@ static void MX_GPIO_Init(void)
   LL_GPIO_ResetOutputPin(GPIOB, LL_GPIO_PIN_6);
 
   /**/
-  LL_GPIO_SetOutputPin(GPIOB, LL_GPIO_PIN_7);
+  LL_GPIO_ResetOutputPin(GPIOB, LL_GPIO_PIN_7);
 
   /**/
   GPIO_InitStruct.Pin = VCC_EN_Pin;
@@ -689,24 +804,53 @@ void HAL_RTC_AlarmAEventCallback(RTC_HandleTypeDef *hrtc)
 	wait = 0;
 }
 
+void ConversionStartPoll_ADC_GrpRegular(void)
+{
+  uint32_t Timeout = 0; /* Variable used for timeout management */
+
+  if ((LL_ADC_IsEnabled(ADC1) == 1)               &&
+      (LL_ADC_IsDisableOngoing(ADC1) == 0)        &&
+      (LL_ADC_REG_IsConversionOngoing(ADC1) == 0)   )
+  {
+    LL_ADC_REG_StartConversion(ADC1);
+  }
+
+
+  Timeout = 200; //ms;
+
+  while (LL_ADC_IsActiveFlag_EOC(ADC1) == 0)
+  {
+    /* Check Systick counter flag to decrement the time-out value */
+    if (LL_SYSTICK_IsActiveCounterFlag())
+    {
+      if(Timeout-- == 0)
+      {
+          return;
+      }
+    }
+  }
+
+  LL_ADC_ClearFlag_EOC(ADC1);
+
+}
+
 uint16_t board_GetVcc(void)
 {
     uint32_t temp;
     uint8_t i;
-    ADC_ChannelConfTypeDef sAdcConf = {0};
 
+    LL_ADC_Enable(ADC1);
     LL_GPIO_SetOutputPin(GPIOA, VCC_EN_Pin);
     HAL_Delay(1);
-    sAdcConf.Channel = 0;
-    sAdcConf.Rank = ADC_RANK_NONE;
 
+    LL_ADC_REG_SetSequencerChannels(ADC1, LL_ADC_CHANNEL_0);
     temp = 0;
     for(i = 0 ; i < 8; i++)
     {
-        HAL_ADC_ConfigChannel(&hadc, &sAdcConf);
-        HAL_ADC_Start(&hadc);
-        HAL_ADC_PollForConversion(&hadc, 200);
-        temp += HAL_ADC_GetValue(&hadc);
+        ConversionStartPoll_ADC_GrpRegular();
+        temp += LL_ADC_REG_ReadConversionData12(ADC1);
+        __NOP();
+
     }
     temp /= 8;
 
@@ -720,23 +864,70 @@ uint16_t board_GetVcc(void)
 uint16_t board_GetLight(void)
 {
     uint32_t temp;
-    ADC_ChannelConfTypeDef sAdcConf = {0};
+
+    LL_ADC_Enable(ADC1);
 
     LL_GPIO_ResetOutputPin(GPIOA, LIGHT_EN_Pin);
     HAL_Delay(1);
-    sAdcConf.Channel = 9;
-    sAdcConf.Rank = ADC_RANK_NONE;
 
-    HAL_ADC_ConfigChannel(&hadc, &sAdcConf);
-    HAL_ADC_Start(&hadc);
-    HAL_ADC_PollForConversion(&hadc, 200);
-    temp = HAL_ADC_GetValue(&hadc);
+    LL_ADC_REG_SetSequencerChannels(ADC1, LL_ADC_CHANNEL_9);
+
+    ConversionStartPoll_ADC_GrpRegular();
+    temp = LL_ADC_REG_ReadConversionData12(ADC1);
 
     LL_GPIO_SetOutputPin(GPIOA, LIGHT_EN_Pin);
 
     return (uint16_t )temp;
 }
 
+uint8_t board_GetNextFreeEntry(void)
+{
+    uint8_t found = 0;
+    uint16_t i;
+    //поиск свободной запсиси
+    for(i = 0; (i < 16384) && (!found); i++)
+    {
+        mem_read_page((uint8_t *)&cache, i, 1);
+
+        for(entry_ptr = 0; entry_ptr < 16; entry_ptr++)
+        {
+            if(cache.entries[entry_ptr].crc16 == 0xFFFF)
+            {
+                eeprom_page_ptr = i;
+                found = 1;
+                break;
+            }
+        }
+    }
+
+    return found;
+}
+
+uint8_t board_WriteEntry(eeprom_entry_t *entry)
+{
+    if(eeprom_page_ptr == 16384)
+        return 0;
+
+    if(entry_ptr == 0)
+    {
+        mem_read_page((uint8_t *)&cache, eeprom_page_ptr, 1);
+    }
+
+    memcpy(&(cache.entries[entry_ptr++]), entry, sizeof(eeprom_entry_t));
+
+    if(entry_ptr == 16)
+    {
+        if(eeprom_page_ptr < 16384)
+        {
+            mem_write_page((uint8_t *)&cache, eeprom_page_ptr, 1);
+            //write
+            eeprom_page_ptr++;
+        }
+        entry_ptr = 0;
+    }
+
+    return 1;
+}
 /**
   * @brief  System Power Configuration
   *         The system Power is configured as follow :
