@@ -246,6 +246,13 @@ uint8_t mesh_Write(uint8_t type, uint8_t *buf, uint8_t size)
     return ok;
 }
 
+uint8_t mesh_Read(uint8_t *type, uint8_t *buf, uint8_t size)
+{
+    startListening();
+
+    //availableMy
+    return 0;
+}
 #if 0
    // address request
    hdr = (RF24NetworkHeader *)frame_buffer;

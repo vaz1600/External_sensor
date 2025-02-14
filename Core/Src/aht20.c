@@ -30,9 +30,9 @@ aht20_status_t aht20_Init(I2C_HandleTypeDef *h)
 
     hi2c = h;
 
+    // проверка связи с датчиком
     if(aht20_write(0, 0) != AHT20_OK)
         return AHT20_NACK;
-
 
     aht20_read(buf,1);
 
@@ -43,15 +43,15 @@ aht20_status_t aht20_Init(I2C_HandleTypeDef *h)
         buf[1] = 0x08;
         buf[2] = 0;
         aht20_write(buf, 3);
-        HAL_Delay(10);
+
+        HAL_Delay(20);
 
         buf[0] = CMD_TRIGGER;
         buf[1] = 0x33;
         buf[2] = 0x00;
-        HAL_Delay(80);
         aht20_write(buf, 3);
 
-        HAL_Delay(10);
+        HAL_Delay(80);
         aht20_read(buf,1);
     }
 //    //Check if the calibrated bit is set. If not, init the sensor.
@@ -86,7 +86,7 @@ aht20_status_t aht20_Init(I2C_HandleTypeDef *h)
 //    if (!getStatus(BIT_CALIBRATED)) return false;
 //    }
 
-    return AHT20_OK;
+    return (buf[1] & 0x80) ? AHT20_OK : AHT20_ERROR;
 }
 
 aht20_status_t aht20_Reset(void)
@@ -104,8 +104,8 @@ aht20_status_t aht20_Measure(void)
     buf[0] = CMD_TRIGGER;
     buf[1] = 0x33;
     buf[2] = 0x00;
-    HAL_Delay(80);
     ret = aht20_write(buf, 3);
+
     if(ret != AHT20_OK)
         return ret;
 

@@ -27,6 +27,7 @@ typedef enum mem_ioctl_cmd_t
     MEM_IOCTL_PAGES_COUNT,   // Get page size
     MEM_IOCTL_PAGE_SIZE,     // Get page size
     MEM_IOCTL_SECTOR_SIZE,   // Get erase block size
+    MEM_IOCTL_TOTAL_SIZE,
     MEM_IOCTL_BURN,          // Write chache to memory
 } mem_ioctl_cmd_t;
 

@@ -21,15 +21,15 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-//#include "Wire.h"
+
 #include "RF24.h"
 #include "RF24_mesh.h"
 #include "aht20.h"
 #include "bmp180.h"
 #include "util.h"
-#include "lfs.h"
-//#include "w25qxx_littlefs.h"
+
 #include "mem.h"
+#include "eventlog.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -40,6 +40,13 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 //#define NO_SLEEP
+
+#define SENSOR_FLAG_AHT20_OK            0x01
+#define SENSOR_FLAG_BMP180_OK           0x02
+#define SENSOR_FLAG_MEM_FULL            0x20
+#define SENSOR_FLAG_MEM_OK              0x40
+#define SENSOR_FLAG_CONNECTED           0x80
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -64,34 +71,38 @@ typedef struct {
   uint32_t vcc;
   uint16_t period;
   uint8_t connected;
-  uint8_t sensors;
+  uint8_t flags;
 } sensor_state_t;
 
 sensor_state_t sensor_state;
 
 typedef struct {
-  int8_t temp;
-  uint8_t humidity;
-  uint16_t pressure;
-  uint16_t light;
-  uint32_t timestamp;
+    uint32_t timestamp;         //
+    uint16_t vcc;
+    uint8_t flags;              //flags
+    int8_t temp;                //aht20 temp
+    uint8_t humidity;           //aht20 hum
+    int8_t temp2;               //bmp180 temp
+    uint16_t pressure;          //bmp180 pressure
+    uint16_t light;             //raw adc from photoresistor
+    uint16_t crc16;             //entry checksum
 } sensor_data_t;
 
 sensor_data_t s_data;
 
  //uint32_t const * eeprom_data = (uint32_t const *)0x08080000;
-
 //uint8_t const * const Addr = (uint8_t const *)0x8080000;
+/*
 typedef struct {
-    uint32_t timestamp;
+    uint32_t timestamp;         //
     uint16_t vcc;
-    int8_t temp;
-    uint8_t humidity;
-    int8_t temp2;
-    uint8_t dummy;
-    uint16_t pressure;
-    uint16_t light;
-    uint16_t crc16;
+    uint8_t dummy;              //flags
+    int8_t temp;                //aht20 temp
+    uint8_t humidity;           //aht20 hum
+    int8_t temp2;               //bmp180 temp
+    uint16_t pressure;          //bmp180 pressure
+    uint16_t light;             //raw adc from photoresistor
+    uint16_t crc16;             //entry checksum
 } eeprom_entry_t ;
 
 typedef struct {
@@ -104,6 +115,7 @@ uint16_t eeprom_page_ptr;
 uint16_t entry_ptr;
 
 eeprom_entry_t temp_entry;
+*/
 
  //W25QXX_HandleTypeDef w25_handle;
 /* USER CODE END PV */
@@ -120,8 +132,8 @@ static void MX_I2C1_Init(void);
 static void SystemPower_Config(void);
 uint16_t board_GetVcc(void);
 uint16_t board_GetLight(void);
-uint8_t board_GetNextFreeEntry(void);
-uint8_t board_WriteEntry(eeprom_entry_t *entry);
+//uint8_t board_GetNextFreeEntry(void);
+//uint8_t board_WriteEntry(eeprom_entry_t *entry);
 //uint32_t board_ConvertToUnixTime(RTC_DateTypeDef *psDate, RTC_TimeTypeDef *psTime);
 
 /* USER CODE END PFP */
@@ -173,20 +185,15 @@ int main(void)
   sensor_state.vcc = 0;
   sensor_state.period = 15;
   sensor_state.connected = 0;
-  sensor_state.sensors = 0;
+  sensor_state.flags = 0;
 
   mesh_Init();
 
 
-  if(mem_init() == MEM_OK)
+  //if(mem_init() == MEM_OK)
+  if(eventlog_init( sizeof(sensor_data_t) ) == LOG_OK)
   {
-      sensor_state.sensors |= 0x08;
-
-      if(board_GetNextFreeEntry() == 0)
-      {
-          sensor_state.sensors |= 0x04;
-      }
-
+      sensor_state.flags |= SENSOR_FLAG_MEM_OK;
   }
 
   // нужна задержка, чтобы можно было прошивку записать/ прочитать
@@ -204,8 +211,6 @@ int main(void)
 
   LL_GPIO_ResetOutputPin(GPIOA, GPIO_PIN_11);
 
- // w25qxx_init(&w25_handle, &hspi1, GPIOA, 4);
-
   // хрен знает поччему, но после повторной инициализции передача идет нормально
   mesh_Init();
 
@@ -215,17 +220,11 @@ int main(void)
 
   // инициализация датчиков
   if(aht20_Init(&hi2c1) == AHT20_OK)
-      sensor_state.sensors |= 0x01;
+      sensor_state.flags |= SENSOR_FLAG_AHT20_OK;
 
   if(bmp180_Init(&hi2c1))
-      sensor_state.sensors |= 0x02;
+      sensor_state.flags |= SENSOR_FLAG_BMP180_OK;
 
-
-
-//  HAL_FLASHEx_DATAEEPROM_Unlock();
-//  HAL_FLASHEx_DATAEEPROM_Program(FLASH_TYPEPROGRAMDATA_WORD, 0x08080000, 9);
-//
-//  HAL_FLASHEx_DATAEEPROM_Lock();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -243,17 +242,27 @@ int main(void)
 	  MX_I2C1_Init();
 	  LL_GPIO_SetOutputPin(GPIOA, LIGHT_EN_Pin);
 #endif
-	  sensor_state.vcc = board_GetVcc();
-
+	  //собираем всю информацию
+	  s_data.vcc = board_GetVcc();
 	  s_data.light = board_GetLight();
 
 	  // опрос датчиков
-	  aht20_Measure();
-	  s_data.temp = (int8_t )(aht20_GetTemp()/10);
-	  s_data.humidity = (uint8_t )(aht20_GetHumidity()/10);
+	  if(aht20_Measure() == AHT20_OK)
+	  {
+	      s_data.temp = (int8_t )(aht20_GetTemp()/10);
+	      s_data.humidity = (uint8_t )(aht20_GetHumidity()/10);
+	  }
+	  else
+	  {
+	      s_data.temp = -127;
+	      s_data.humidity = 255;
+	      sensor_state.flags &= ~SENSOR_FLAG_AHT20_OK;
+	  }
 
-	  bmp180_GetTemp();
+	  s_data.temp2 = bmp180_GetTemp();
 	  s_data.pressure = (uint16_t )(bmp180_GetPressure()/10);
+
+	  s_data.flags = sensor_state.flags;
 
 	  // запуск будильника на следующее пробуждение
 	  HAL_RTC_DeactivateAlarm(&hrtc, RTC_ALARM_A);
@@ -276,24 +285,23 @@ int main(void)
 	      sensor_state.connected = mesh_Write('T', (uint8_t *)&s_data, sizeof(sensor_data_t));
 
 	      // ждем чего-нибудь от базовой станции
+
+	      // комнады сброса памяти
+	      // запрос данных из памяти
+	      // запрос версии по
+	      // просто сброс
+	      // установка времени
+	      // становка периода работы
+	      // запрос состояния и флагов устройства
+	      // во флеш еще можно писать когда связь отвалилась и появилась
 	  }
 
-	  // пока так
-	  temp_entry.timestamp = s_data.timestamp;
-	  temp_entry.vcc = sensor_state.vcc;
-	  temp_entry.temp = s_data.temp;
-	  temp_entry.humidity = s_data.humidity;
-	  temp_entry.pressure = s_data.pressure;
-	  temp_entry.light = s_data.light;
-	  temp_entry.temp2 = 0;
-	  temp_entry.dummy = 0x55;
-	  temp_entry.crc16 = 0;
+	  //пишем все во флешку
+	  if(eventlog_write(&s_data) == LOG_NO_MEM)
+	  {
+	      sensor_state.flags |= SENSOR_FLAG_MEM_FULL;
+	  }
 
-	  board_WriteEntry(&temp_entry);
-//	  else
-//	  {
-//	      // запись в еепром?
-//	  }
 	  // ставим время следующего пробуждения
 	    sTime.Seconds = sTime.Seconds + (sensor_state.period % 60);
 	    if(sTime.Seconds >= 60)
@@ -879,55 +887,55 @@ uint16_t board_GetLight(void)
 
     return (uint16_t )temp;
 }
-
-uint8_t board_GetNextFreeEntry(void)
-{
-    uint8_t found = 0;
-    uint16_t i;
-    //поиск свободной запсиси
-    for(i = 0; (i < 16384) && (!found); i++)
-    {
-        mem_read_page((uint8_t *)&cache, i, 1);
-
-        for(entry_ptr = 0; entry_ptr < 16; entry_ptr++)
-        {
-            if(cache.entries[entry_ptr].crc16 == 0xFFFF)
-            {
-                eeprom_page_ptr = i;
-                found = 1;
-                break;
-            }
-        }
-    }
-
-    return found;
-}
-
-uint8_t board_WriteEntry(eeprom_entry_t *entry)
-{
-    if(eeprom_page_ptr == 16384)
-        return 0;
-
-    if(entry_ptr == 0)
-    {
-        mem_read_page((uint8_t *)&cache, eeprom_page_ptr, 1);
-    }
-
-    memcpy(&(cache.entries[entry_ptr++]), entry, sizeof(eeprom_entry_t));
-
-    if(entry_ptr == 16)
-    {
-        if(eeprom_page_ptr < 16384)
-        {
-            mem_write_page((uint8_t *)&cache, eeprom_page_ptr, 1);
-            //write
-            eeprom_page_ptr++;
-        }
-        entry_ptr = 0;
-    }
-
-    return 1;
-}
+//
+//uint8_t board_GetNextFreeEntry(void)
+//{
+//    uint8_t found = 0;
+//    uint16_t i;
+//    //поиск свободной запсиси
+//    for(i = 0; (i < 16384) && (!found); i++)
+//    {
+//        mem_read_page((uint8_t *)&cache, i, 1);
+//
+//        for(entry_ptr = 0; entry_ptr < 16; entry_ptr++)
+//        {
+//            if(cache.entries[entry_ptr].crc16 == 0xFFFF)
+//            {
+//                eeprom_page_ptr = i;
+//                found = 1;
+//                break;
+//            }
+//        }
+//    }
+//
+//    return found;
+//}
+//
+//uint8_t board_WriteEntry(eeprom_entry_t *entry)
+//{
+//    if(eeprom_page_ptr == 16384)
+//        return 0;
+//
+//    if(entry_ptr == 0)
+//    {
+//        mem_read_page((uint8_t *)&cache, eeprom_page_ptr, 1);
+//    }
+//
+//    memcpy(&(cache.entries[entry_ptr++]), entry, sizeof(eeprom_entry_t));
+//
+//    if(entry_ptr == 16)
+//    {
+//        if(eeprom_page_ptr < 16384)
+//        {
+//            mem_write_page((uint8_t *)&cache, eeprom_page_ptr, 1);
+//            //write
+//            eeprom_page_ptr++;
+//        }
+//        entry_ptr = 0;
+//    }
+//
+//    return 1;
+//}
 /**
   * @brief  System Power Configuration
   *         The system Power is configured as follow :

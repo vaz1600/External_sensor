@@ -222,6 +222,7 @@ mem_status_t mem_ioctl(mem_ioctl_cmd_t cmd, void* data)
             case MEM_IOCTL_SECTOR_SIZE: *(( uint32_t* )data) = dev->sector_size; break;
             case MEM_IOCTL_PAGES_COUNT: *(( uint32_t* )data) = dev->flash_size / dev->page_size; break;
             case MEM_IOCTL_PAGE_SIZE: *(( uint32_t* )data) = dev->page_size; break;
+            case MEM_IOCTL_TOTAL_SIZE: *(( uint32_t* )data) = dev->flash_size; break;
 
             case MEM_IOCTL_BURN: status = mem_update_cache(current_sector); break;
 
