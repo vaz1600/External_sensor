@@ -248,9 +248,37 @@ uint8_t mesh_Write(uint8_t type, uint8_t *buf, uint8_t size)
 
 uint8_t mesh_Read(uint8_t *type, uint8_t *buf, uint8_t size)
 {
+    volatile RF24NetworkHeader *h;
+
+    LL_GPIO_SetOutputPin(GPIOA, GPIO_PIN_11);
+
+    frame_size = 8 + size;
+
+    uint32_t timeout = HAL_GetTick() + 250;
+
     startListening();
 
-    //availableMy
+    // timeout
+    while(HAL_GetTick() < timeout)
+    {
+        if(availableMy())
+        {
+            frame_size = getDynamicPayloadSize();
+            read(frame_buffer, frame_size);
+
+            memcpy(buf,frame_buffer + 8, size);
+
+            h = (RF24NetworkHeader *)frame_buffer;
+
+            if(type)
+                *type = h->type;
+
+            LL_GPIO_ResetOutputPin(GPIOA, GPIO_PIN_11);
+            return 1;
+        }
+    }
+
+    LL_GPIO_ResetOutputPin(GPIOA, GPIO_PIN_11);
     return 0;
 }
 #if 0

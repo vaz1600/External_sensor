@@ -226,6 +226,15 @@ mem_status_t mem_ioctl(mem_ioctl_cmd_t cmd, void* data)
 
             case MEM_IOCTL_BURN: status = mem_update_cache(current_sector); break;
 
+            case MEM_IOCTL_ERASE_CHIP:
+                status = mem_send_cmd(MEM_CMD_ERASE_CHIP);
+
+                if(status == MEM_OK)
+                {
+                    status = mem_wait_rdy(dev->timeout);
+                }
+                break;
+
             case MEM_IOCTL_CTRL_SYNC:
             default: break;
         }

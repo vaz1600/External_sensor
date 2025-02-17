@@ -90,6 +90,10 @@ typedef struct {
 
 sensor_data_t s_data;
 
+uint8_t type;
+uint8_t cmd[16];
+uint32_t tmp32;
+
  //uint32_t const * eeprom_data = (uint32_t const *)0x08080000;
 //uint8_t const * const Addr = (uint8_t const *)0x8080000;
 /*
@@ -190,7 +194,6 @@ int main(void)
   mesh_Init();
 
 
-  //if(mem_init() == MEM_OK)
   if(eventlog_init( sizeof(sensor_data_t) ) == LOG_OK)
   {
       sensor_state.flags |= SENSOR_FLAG_MEM_OK;
@@ -246,6 +249,8 @@ int main(void)
 	  s_data.vcc = board_GetVcc();
 	  s_data.light = board_GetLight();
 
+	  // надо добавиьт внутренний датчик стм в случае отказа оставльных
+
 	  // опрос датчиков
 	  if(aht20_Measure() == AHT20_OK)
 	  {
@@ -290,10 +295,58 @@ int main(void)
 	      // запрос данных из памяти
 	      // запрос версии по
 	      // просто сброс
-	      // установка времени
-	      // становка периода работы
+
 	      // запрос состояния и флагов устройства
 	      // во флеш еще можно писать когда связь отвалилась и появилась
+
+	      if(mesh_Read(&type, cmd, 8))
+	      {
+	          switch(type)
+	          {
+                case 'd':
+                    HAL_RTC_GetTime(&hrtc, &sTime, RTC_FORMAT_BIN);
+                    HAL_RTC_GetDate(&hrtc, &sDate, RTC_FORMAT_BIN);
+
+                    HAL_RTC_SetTime(&hrtc, &sTime, RTC_FORMAT_BIN);
+                    sDate.Month = cmd[2]; //month
+                    sDate.Date = cmd[1]; //date;
+                    sDate.Year = cmd[3];
+                    HAL_RTC_SetDate(&hrtc, &sDate, RTC_FORMAT_BIN);
+                    break;
+
+                case 't':
+                    HAL_RTC_GetTime(&hrtc, &sTime, RTC_FORMAT_BIN);
+                    HAL_RTC_GetDate(&hrtc, &sDate, RTC_FORMAT_BIN);
+
+                    sTime.Hours = cmd[1];
+                    sTime.Minutes = cmd[2];
+                    sTime.Seconds = cmd[3];
+
+                    HAL_RTC_SetTime(&hrtc, &sTime, RTC_FORMAT_BIN);
+                    HAL_RTC_SetDate(&hrtc, &sDate, RTC_FORMAT_BIN);
+                    break;
+
+                case 'P':
+                    memcpy(&(sensor_state.period), &cmd[1], 2);
+                    break;
+
+                case 'm':
+                    tmp32 = eventlog_getFreeMemory();
+                    memcpy(cmd, &tmp32, 4);
+                    tmp32 = eventlog_getTotalMemory();
+                    memcpy(cmd+4, &tmp32, 4);
+                    sensor_state.connected = mesh_Write('m', cmd, 8);
+                    break;
+
+                case 's':
+                    sensor_state.connected = mesh_Write('s', (uint8_t *)&sensor_state, sizeof(sensor_state));
+                    break;
+
+                case 'f':
+                    eventlog_flush();
+                    break;
+	          }
+	      }
 	  }
 
 	  //пишем все во флешку
@@ -303,6 +356,12 @@ int main(void)
 	  }
 
 	  // ставим время следующего пробуждения
+	    sTime.Minutes = sTime.Minutes + (sensor_state.period / 60);
+	    if(sTime.Minutes >= 60)
+        {
+            sTime.Minutes -= 60;
+        }
+
 	    sTime.Seconds = sTime.Seconds + (sensor_state.period % 60);
 	    if(sTime.Seconds >= 60)
 	    {
@@ -648,43 +707,43 @@ static void MX_RTC_Init(void)
 
   /** Initialize RTC and set the Time and Date
   */
-  sTime.Hours = 12;
-  sTime.Minutes = 15;
-  sTime.Seconds = 0;
-  sTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
-  sTime.StoreOperation = RTC_STOREOPERATION_RESET;
-  if (HAL_RTC_SetTime(&hrtc, &sTime, RTC_FORMAT_BIN) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sDate.WeekDay = RTC_WEEKDAY_SUNDAY;
-  sDate.Month = RTC_MONTH_JANUARY;
-  sDate.Date = 12;
-  sDate.Year = 25;
-
-  if (HAL_RTC_SetDate(&hrtc, &sDate, RTC_FORMAT_BIN) != HAL_OK)
-  {
-    Error_Handler();
-  }
+//  sTime.Hours = 12;
+//  sTime.Minutes = 15;
+//  sTime.Seconds = 0;
+//  sTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
+//  sTime.StoreOperation = RTC_STOREOPERATION_RESET;
+//  if (HAL_RTC_SetTime(&hrtc, &sTime, RTC_FORMAT_BIN) != HAL_OK)
+//  {
+//    Error_Handler();
+//  }
+//  sDate.WeekDay = RTC_WEEKDAY_SUNDAY;
+//  sDate.Month = RTC_MONTH_JANUARY;
+//  sDate.Date = 12;
+//  sDate.Year = 25;
+//
+//  if (HAL_RTC_SetDate(&hrtc, &sDate, RTC_FORMAT_BIN) != HAL_OK)
+//  {
+//    Error_Handler();
+//  }
 
   /** Enable the Alarm A
   */
-  sAlarm.AlarmTime.Hours = 12;
-  sAlarm.AlarmTime.Minutes = 15;
-  sAlarm.AlarmTime.Seconds = 5;
-  sAlarm.AlarmTime.SubSeconds = 0;
-  sAlarm.AlarmTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
-  sAlarm.AlarmTime.StoreOperation = RTC_STOREOPERATION_RESET;
-  sAlarm.AlarmMask = RTC_ALARMMASK_DATEWEEKDAY|RTC_ALARMMASK_HOURS
-                              |RTC_ALARMMASK_MINUTES;
-  sAlarm.AlarmSubSecondMask = RTC_ALARMSUBSECONDMASK_ALL;
-  sAlarm.AlarmDateWeekDaySel = RTC_ALARMDATEWEEKDAYSEL_DATE;
-  sAlarm.AlarmDateWeekDay = 1;
-  sAlarm.Alarm = RTC_ALARM_A;
-  if (HAL_RTC_SetAlarm_IT(&hrtc, &sAlarm, RTC_FORMAT_BIN) != HAL_OK)
-  {
-    Error_Handler();
-  }
+//  sAlarm.AlarmTime.Hours = 12;
+//  sAlarm.AlarmTime.Minutes = 15;
+//  sAlarm.AlarmTime.Seconds = 5;
+//  sAlarm.AlarmTime.SubSeconds = 0;
+//  sAlarm.AlarmTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
+//  sAlarm.AlarmTime.StoreOperation = RTC_STOREOPERATION_RESET;
+//  sAlarm.AlarmMask = RTC_ALARMMASK_DATEWEEKDAY|RTC_ALARMMASK_HOURS
+//                              |RTC_ALARMMASK_MINUTES;
+//  sAlarm.AlarmSubSecondMask = RTC_ALARMSUBSECONDMASK_ALL;
+//  sAlarm.AlarmDateWeekDaySel = RTC_ALARMDATEWEEKDAYSEL_DATE;
+//  sAlarm.AlarmDateWeekDay = 1;
+//  sAlarm.Alarm = RTC_ALARM_A;
+//  if (HAL_RTC_SetAlarm_IT(&hrtc, &sAlarm, RTC_FORMAT_BIN) != HAL_OK)
+//  {
+//    Error_Handler();
+//  }
   /* USER CODE BEGIN RTC_Init 2 */
 
   /* USER CODE END RTC_Init 2 */

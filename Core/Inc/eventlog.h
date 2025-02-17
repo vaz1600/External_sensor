@@ -25,4 +25,6 @@ eventlog_status_t eventlog_write(void *entry);
 eventlog_status_t eventlog_read(uint32_t entry_num, void *entry);
 eventlog_status_t eventlog_flush(void);
 
+uint32_t eventlog_getFreeMemory(void);
+uint32_t eventlog_getTotalMemory(void);
 #endif /* INC_EVENTLOG_H_ */

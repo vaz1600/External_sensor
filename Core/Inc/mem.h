@@ -29,6 +29,7 @@ typedef enum mem_ioctl_cmd_t
     MEM_IOCTL_SECTOR_SIZE,   // Get erase block size
     MEM_IOCTL_TOTAL_SIZE,
     MEM_IOCTL_BURN,          // Write chache to memory
+    MEM_IOCTL_ERASE_CHIP
 } mem_ioctl_cmd_t;
 
 /* ---------------------------------------------------------------------------------------------------------*/

@@ -111,10 +111,19 @@ eventlog_status_t eventlog_read(uint32_t entry_num, void *entry)
 eventlog_status_t eventlog_flush(void)
 {
     event_log.next_free_ptr = 0;
-    //event_log.cache_ptr = 0;
 
     //erase all
-    return LOG_OK;
+    return (mem_ioctl(MEM_IOCTL_ERASE_CHIP, 0) == MEM_OK) ? LOG_OK : LOG_ERROR;
+}
+
+uint32_t eventlog_getFreeMemory(void)
+{
+    return event_log.next_free_ptr;
+}
+
+uint32_t eventlog_getTotalMemory(void)
+{
+    return event_log.max_entries;
 }
 
 #if 0

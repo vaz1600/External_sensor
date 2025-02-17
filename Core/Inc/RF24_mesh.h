@@ -15,6 +15,6 @@ void mesh_Begin(uint16_t addr);
 uint8_t mesh_AddressRequest(void);
 uint8_t mesh_Lookup(void);
 uint8_t mesh_Write(uint8_t type, uint8_t *buf, uint8_t size);
-uint8_t mesh_Read(uint8_t type, uint8_t *buf, uint8_t size);
+uint8_t mesh_Read(uint8_t *type, uint8_t *buf, uint8_t size);
 
 #endif /* INC_RF24_MESH_H_ */
