@@ -93,6 +93,7 @@ sensor_data_t s_data;
 uint8_t type;
 uint8_t cmd[16];
 uint32_t tmp32;
+uint32_t i;
 
  //uint32_t const * eeprom_data = (uint32_t const *)0x08080000;
 //uint8_t const * const Addr = (uint8_t const *)0x8080000;
@@ -340,6 +341,20 @@ int main(void)
 
                 case 's':
                     sensor_state.connected = mesh_Write('s', (uint8_t *)&sensor_state, sizeof(sensor_state));
+                    break;
+
+                case 'M':
+                    memcpy(&tmp32, cmd + 1, 4);
+
+                    if(tmp32 > 4194304)
+                        break;
+
+                    for(i = 0; i < 16; i++)
+                    {
+                        eventlog_read(i*16 + tmp32, (sensor_data_t *)&s_data);
+                        mesh_Write('T', (uint8_t *)&s_data, sizeof(sensor_data_t));
+                        HAL_Delay(100);
+                    }
                     break;
 
                 case 'f':

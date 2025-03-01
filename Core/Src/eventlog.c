@@ -99,11 +99,12 @@ eventlog_status_t eventlog_write(void *entry)
 
 eventlog_status_t eventlog_read(uint32_t entry_num, void *entry)
 {
-    uint32_t page_ptr = entry_num & 256;
+    uint32_t page_ptr = entry_num / 256;
+    uint32_t entry_ptr = entry_num % 256;
 
     mem_read_page(eventlog_cache, page_ptr, 1);
 
-    memcpy((uint8_t *)entry, &eventlog_cache[0], 16);
+    memcpy((uint8_t *)entry, &eventlog_cache[entry_ptr], 16);
 
     return LOG_OK;
 }
