@@ -181,7 +181,7 @@ int main(void)
   MX_GPIO_Init();
   MX_RTC_Init();
   MX_ADC_Init();
-  MX_LPUART1_UART_Init();
+  //MX_LPUART1_UART_Init();
   MX_SPI1_Init();
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
@@ -194,7 +194,7 @@ int main(void)
 
   mesh_Init();
 
-
+  LL_GPIO_SetOutputPin(GPIOA, GPIO_PIN_11);
   if(eventlog_init( sizeof(sensor_data_t) ) == LOG_OK)
   {
       sensor_state.flags |= SENSOR_FLAG_MEM_OK;
@@ -245,6 +245,8 @@ int main(void)
 	  MX_SPI1_Init();
 	  MX_I2C1_Init();
 	  LL_GPIO_SetOutputPin(GPIOA, LIGHT_EN_Pin);
+
+	  mem_init();
 #endif
 	  //собираем всю информацию
 	  s_data.vcc = board_GetVcc();
@@ -410,6 +412,8 @@ int main(void)
 #else
 		NRF_sleep();
 
+		mem_ioctl(MEM_IOCTL_POWERDOWN, 0);
+
 		/* Configure the system Power */
 		SystemPower_Config();
 
@@ -482,7 +486,7 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
-  LL_RCC_SetLPUARTClockSource(LL_RCC_LPUART1_CLKSOURCE_LSE);
+  //LL_RCC_SetLPUARTClockSource(LL_RCC_LPUART1_CLKSOURCE_LSE);
   LL_RCC_SetI2CClockSource(LL_RCC_I2C1_CLKSOURCE_PCLK1);
 }
 
@@ -857,10 +861,10 @@ static void MX_GPIO_Init(void)
   LL_GPIO_Init(LED_GPIO_Port, &GPIO_InitStruct);
 
   /**/
-  GPIO_InitStruct.Pin = LL_GPIO_PIN_15;
-  GPIO_InitStruct.Mode = LL_GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
-  LL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+//  GPIO_InitStruct.Pin = LL_GPIO_PIN_15;
+//  GPIO_InitStruct.Mode = LL_GPIO_MODE_INPUT;
+//  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
+//  LL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /**/
   GPIO_InitStruct.Pin = LL_GPIO_PIN_6;
@@ -1054,9 +1058,14 @@ static void SystemPower_Config(void)
   HAL_GPIO_Init(GPIOC, &GPIO_InitStructure);
   HAL_GPIO_Init(GPIOH, &GPIO_InitStructure);
 
+  GPIO_InitStructure.Pin = 0xFF00 | GPIO_PIN_7;
+  GPIO_InitStructure.Mode = GPIO_MODE_ANALOG;
+  GPIO_InitStructure.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStructure);
+
   /* Disable GPIOs clock */
   //__HAL_RCC_GPIOA_CLK_DISABLE();
-  //__HAL_RCC_GPIOB_CLK_DISABLE();
+  __HAL_RCC_GPIOB_CLK_DISABLE();
   __HAL_RCC_GPIOC_CLK_DISABLE();
   __HAL_RCC_GPIOH_CLK_DISABLE();
 }

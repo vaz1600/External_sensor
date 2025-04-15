@@ -54,6 +54,8 @@ typedef enum mem_cmd_t
     MEM_CMD_ERASE_BLOCK64  = 0xD8, // Block Erase(64KB)
     MEM_CMD_ERASE_CHIP     = 0x60, // Chip Erase
     MEM_CMD_READ_JEDEC     = 0x9f, // Read JEDEC ID
+	MEM_CMD_POWERDOWN	   = 0xb9, // powerdown
+	MEM_CMD_RELEASE 	   = 0xAB, // powerdown release
 } mem_cmd_t;
 
 typedef union mem_sr1_t
@@ -118,6 +120,7 @@ static mem_status_t mem_write_data(uint32_t addr, uint8_t* data, size_t len);
 static mem_status_t mem_wait_rdy(uint32_t timeout);
 
 static mem_status_t mem_send_cmd(mem_cmd_t cmd);
+static mem_status_t mem_send_cmd_no_ack(mem_cmd_t cmd);
 static mem_status_t mem_status_unsafe();
 
 static mem_status_t mem_update_cache(int32_t new_sector);
@@ -145,6 +148,10 @@ mem_status_t mem_init()
     mem_mux_create();
 
     mem_status_t status = MEM_ERROR;
+
+    //check status
+    if (mem_send_cmd_no_ack(MEM_CMD_RELEASE) != MEM_OK)
+    	return MEM_ERROR;
 
     // Read JEDEC ID
     mem_mux_take();
@@ -234,6 +241,19 @@ mem_status_t mem_ioctl(mem_ioctl_cmd_t cmd, void* data)
                     status = mem_wait_rdy(dev->timeout);
                 }
                 break;
+
+            case MEM_IOCTL_POWERDOWN:
+                status = mem_send_cmd_no_ack(MEM_CMD_POWERDOWN);
+
+//                if(status == MEM_OK)
+//                {
+//                    status = mem_wait_rdy(dev->timeout);
+//                }
+            	break;
+
+            case MEM_IOCTL_RELEASE:
+                status = mem_send_cmd_no_ack(MEM_CMD_RELEASE);
+            	break;
 
             case MEM_IOCTL_CTRL_SYNC:
             default: break;
@@ -369,6 +389,20 @@ static mem_status_t mem_send_cmd(mem_cmd_t cmd)
     spi_cs_deactivate();
 
     return status == MEM_OK ? mem_wait_rdy(dev->timeout) : status;
+}
+
+static mem_status_t mem_send_cmd_no_ack(mem_cmd_t cmd)
+{
+    uint8_t data[] = {cmd};
+    mem_status_t status;
+
+    spi_cs_activate();
+    {
+        status = spi_tx(data, 1) == SPI_OK ? MEM_OK : MEM_ERROR;
+    }
+    spi_cs_deactivate();
+
+    return status;
 }
 
 static mem_status_t mem_read_data(uint32_t addr, uint8_t* data, size_t len)

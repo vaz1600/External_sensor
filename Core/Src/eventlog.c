@@ -52,7 +52,11 @@ eventlog_status_t eventlog_init(uint16_t entry_size)
                 // ну такое себе условие свободности
                 ptr32 = (uint32_t *)(&eventlog_cache[cache_ptr]);
                 if(*ptr32 == 0xFFFFFFFF)
+                {
+                    mem_ioctl(MEM_IOCTL_POWERDOWN, 0);
+
                     return LOG_OK;
+            	}
 
                 event_log.next_free_ptr += event_log.entry_size;
             }
@@ -60,6 +64,8 @@ eventlog_status_t eventlog_init(uint16_t entry_size)
 
         status = LOG_NO_MEM;
     }
+
+    mem_ioctl(MEM_IOCTL_POWERDOWN, 0);
 
     return status;
 }
@@ -93,6 +99,8 @@ eventlog_status_t eventlog_write(void *entry)
     }
 
     event_log.next_free_ptr += event_log.entry_size;
+
+   // mem_ioctl(MEM_IOCTL_POWERDOWN, 0);
 
     return LOG_OK;
 }
