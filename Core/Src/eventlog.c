@@ -53,7 +53,7 @@ eventlog_status_t eventlog_init(uint16_t entry_size)
                 ptr32 = (uint32_t *)(&eventlog_cache[cache_ptr]);
                 if(*ptr32 == 0xFFFFFFFF)
                 {
-                    mem_ioctl(MEM_IOCTL_POWERDOWN, 0);
+                    //mem_ioctl(MEM_IOCTL_POWERDOWN, 0);
 
                     return LOG_OK;
             	}
@@ -65,7 +65,7 @@ eventlog_status_t eventlog_init(uint16_t entry_size)
         status = LOG_NO_MEM;
     }
 
-    mem_ioctl(MEM_IOCTL_POWERDOWN, 0);
+    //mem_ioctl(MEM_IOCTL_POWERDOWN, 0);
 
     return status;
 }
@@ -107,10 +107,14 @@ eventlog_status_t eventlog_write(void *entry)
 
 eventlog_status_t eventlog_read(uint32_t entry_num, void *entry)
 {
+    static uint32_t current_page = 0xFFFFFFFF;
+
     uint32_t page_ptr = entry_num / 256;
     uint32_t entry_ptr = entry_num % 256;
 
-    mem_read_page(eventlog_cache, page_ptr, 1);
+    if(current_page != page_ptr)
+        mem_read_page(eventlog_cache, page_ptr, 1);
+
 
     memcpy((uint8_t *)entry, &eventlog_cache[entry_ptr], 16);
 

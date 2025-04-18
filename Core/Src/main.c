@@ -246,7 +246,10 @@ int main(void)
 	  MX_I2C1_Init();
 	  LL_GPIO_SetOutputPin(GPIOA, LIGHT_EN_Pin);
 
+	  // вот тут просыпается микросхема памяти, если спит
 	  mem_init();
+
+	  mem_ioctl(MEM_IOCTL_RELEASE, 0);
 #endif
 	  //собираем всю информацию
 	  s_data.vcc = board_GetVcc();
@@ -346,6 +349,23 @@ int main(void)
                     break;
 
                 case 'M':
+                    //тут мы посылаем целую страницу памяти из 16 записей
+                    // в аргументе функцииномер страницы (всего 4 194 304 байта, страниц 16384 страниц)
+                    memcpy(&tmp32, cmd + 1, 4);
+
+                    if(tmp32 > 16384)
+                        break;
+
+                    for(i = 0; i < 16; i++)
+                    {
+                        eventlog_read(i*16 + tmp32, (sensor_data_t *)&s_data);
+
+                        mesh_Write('T', (uint8_t *)&s_data, sizeof(sensor_data_t));
+                        HAL_Delay(100);
+                    }
+                    break;
+
+                case 'G':
                     memcpy(&tmp32, cmd + 1, 4);
 
                     if(tmp32 > 4194304)
@@ -361,6 +381,12 @@ int main(void)
 
                 case 'f':
                     eventlog_flush();
+
+                    tmp32 = eventlog_getFreeMemory();
+                    memcpy(cmd, &tmp32, 4);
+                    tmp32 = eventlog_getTotalMemory();
+                    memcpy(cmd+4, &tmp32, 4);
+                    sensor_state.connected = mesh_Write('m', cmd, 8);
                     break;
 	          }
 	      }

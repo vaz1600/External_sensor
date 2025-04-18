@@ -52,7 +52,7 @@ typedef enum mem_cmd_t
     MEM_CMD_ERASE_SECTOR   = 0x20, // Sector Erase(4KB)
     MEM_CMD_ERASE_BLOCK32  = 0x52, // Block Erase(32KB)
     MEM_CMD_ERASE_BLOCK64  = 0xD8, // Block Erase(64KB)
-    MEM_CMD_ERASE_CHIP     = 0x60, // Chip Erase
+    MEM_CMD_ERASE_CHIP     = 0xC7,//0x60, // Chip Erase
     MEM_CMD_READ_JEDEC     = 0x9f, // Read JEDEC ID
 	MEM_CMD_POWERDOWN	   = 0xb9, // powerdown
 	MEM_CMD_RELEASE 	   = 0xAB, // powerdown release
@@ -115,12 +115,14 @@ static uint8_t mem_cache[ 1024 * 4 ]   = {0};
 
 /* ---------------------------------------------------------------------------------------------------------*/
 static mem_status_t mem_erase_sector(uint32_t addr);
+static mem_status_t mem_erase_chip(void);
 static mem_status_t mem_read_data(uint32_t addr, uint8_t* data, size_t len);
 static mem_status_t mem_write_data(uint32_t addr, uint8_t* data, size_t len);
 static mem_status_t mem_wait_rdy(uint32_t timeout);
 
 static mem_status_t mem_send_cmd(mem_cmd_t cmd);
 static mem_status_t mem_send_cmd_no_ack(mem_cmd_t cmd);
+static mem_status_t mem_send_release(mem_cmd_t cmd);
 static mem_status_t mem_status_unsafe();
 
 static mem_status_t mem_update_cache(int32_t new_sector);
@@ -151,6 +153,7 @@ mem_status_t mem_init()
 
     //check status
     if (mem_send_cmd_no_ack(MEM_CMD_RELEASE) != MEM_OK)
+    //if(mem_ioctl(MEM_IOCTL_RELEASE, 0) != MEM_OK)
     	return MEM_ERROR;
 
     // Read JEDEC ID
@@ -234,12 +237,16 @@ mem_status_t mem_ioctl(mem_ioctl_cmd_t cmd, void* data)
             case MEM_IOCTL_BURN: status = mem_update_cache(current_sector); break;
 
             case MEM_IOCTL_ERASE_CHIP:
-                status = mem_send_cmd(MEM_CMD_ERASE_CHIP);
+                /*status = mem_send_cmd_no_ack(MEM_CMD_WRITE_EN);
+
+                status = mem_send_cmd_no_ack(MEM_CMD_ERASE_CHIP);
 
                 if(status == MEM_OK)
                 {
                     status = mem_wait_rdy(dev->timeout);
                 }
+                */
+                status =  mem_erase_chip();
                 break;
 
             case MEM_IOCTL_POWERDOWN:
@@ -252,7 +259,11 @@ mem_status_t mem_ioctl(mem_ioctl_cmd_t cmd, void* data)
             	break;
 
             case MEM_IOCTL_RELEASE:
-                status = mem_send_cmd_no_ack(MEM_CMD_RELEASE);
+                status = mem_send_release(MEM_CMD_POWERDOWN);
+
+                //status = mem_send_cmd_no_ack(MEM_CMD_RELEASE);
+                //status = mem_wait_rdy(dev->timeout);
+
             	break;
 
             case MEM_IOCTL_CTRL_SYNC:
@@ -405,6 +416,25 @@ static mem_status_t mem_send_cmd_no_ack(mem_cmd_t cmd)
     return status;
 }
 
+
+static mem_status_t mem_send_release(mem_cmd_t cmd)
+{
+    uint8_t data[4] = {0xff};
+    uint8_t ack[4] = {0};
+
+    mem_status_t status;
+
+    data[0] = 0xAB;
+
+    spi_cs_activate();
+    {
+        status = spi_tx_rx(data, ack, 4) == SPI_OK ? MEM_OK : MEM_ERROR;
+    }
+    spi_cs_deactivate();
+
+    return status;
+}
+
 static mem_status_t mem_read_data(uint32_t addr, uint8_t* data, size_t len)
 {
     if (addr > dev->flash_size || data == NULL) { return MEM_PARERR; }
@@ -459,6 +489,26 @@ static mem_status_t mem_erase_sector(uint32_t addr)
         uint32_t cmd = __REV(addr) | MEM_CMD_ERASE_SECTOR;
         if (status != MEM_OK || // write enable
             spi_tx(&cmd, 4) != SPI_OK)
+        {
+            status = MEM_ERROR;
+        }
+    }
+    spi_cs_deactivate(); // Erase page on cs deactivation
+
+    status = mem_wait_rdy(dev->timeout);
+
+    return status;
+}
+
+static mem_status_t mem_erase_chip(void)
+{
+    mem_status_t status = mem_send_cmd(MEM_CMD_WRITE_EN);
+
+    spi_cs_activate();
+    {
+        uint8_t cmd = MEM_CMD_ERASE_CHIP;
+        if (status != MEM_OK || // write enable
+            spi_tx(&cmd, 1) != SPI_OK)
         {
             status = MEM_ERROR;
         }
